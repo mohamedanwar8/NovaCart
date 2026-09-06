@@ -1,0 +1,16 @@
+channel_id,channel_name,channel_subtype,channel_category
+1,Google Ads,Paid Search,Paid
+2,Facebook Ads,Paid Social,Paid
+3,Instagram Ads,Paid Social,Paid
+4,TikTok Ads,Paid Social,Paid
+5,LinkedIn Ads,Paid Social,Paid
+6,Twitter Ads,Paid Social,Paid
+7,Pinterest Ads,Paid Social,Paid
+8,Snapchat Ads,Paid Social,Paid
+9,YouTube Ads,Paid Video,Paid
+10,Display Ads,Programmatic Display,Paid
+11,Email Marketing,Email,Owned
+12,Affiliate Marketing,Affiliate,Partner
+13,Organic Search,SEO,Organic
+14,Referral,Word of Mouth,Organic
+15,Bing Ads,Paid Search,Paid
