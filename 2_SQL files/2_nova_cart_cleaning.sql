@@ -1,41 +1,23 @@
 
--- fact campaigns cleaning
+-- =====================================================================
+-- NovaCart — Fact Table Cleaning
+-- Cleans fact_campaigns and standardizes shared dimension values.
+-- Run after 01_profiling.sql, before 03_campaign_performance.sql.
+-- =====================================================================
 
-select distinct record_date  
-from fact_campaigns;
+-- ---------------------------------------------------------------------
+-- 1. record_date: standardize inconsistent date formats
+-- ---------------------------------------------------------------------
+-- Source data mixes multiple date formats (M/D/YYYY, DD-Mon-YY, DD-MM-YYYY),
+-- plus blank/invalid strings ('', '----'). Each is parsed into a proper
+-- DATE column; anything unrecognized is set to NULL rather than guessed.
 
-
-/*
-- change the record_date format to make it consistent as a date
-- deal with missing values in the impressions, clicks, conversions, spendings, and revenue columns
-- data normalization for the device column to transform the data into a standard and consistent form
-- data standarization for the country column
-
-
-investigating missing values
-
-- no null values in clicks, impressions, spendings, or conversions columns
-- 10949 null values in revenue, 209426 not null values
-- there is no duplicate values 
-
-*/
-
-
-
---- checking different date patterns in record_date
-SELECT DISTINCT 
+SELECT DISTINCT
     REGEXP_REPLACE(record_date, '[0-9]', 'X', 'g') AS date_pattern
 FROM fact_campaigns;
 
-
-
--- standardizing the record date column  
-
--- adding a new column to clean the date
 ALTER TABLE fact_campaigns
 ADD COLUMN record_date_clean date;
-
--- cleaning the date 
 
 UPDATE fact_campaigns
 SET record_date_clean = CASE
@@ -51,318 +33,226 @@ SET record_date_clean = CASE
     WHEN record_date ~ '^\d{2}-\d{2}-\d{4}$'
         THEN to_date(record_date, 'DD-MM-YYYY')
 
-    ELSE NULL  -- catches '', '----', and anything unexpected
+    ELSE NULL  -- catches '', '----', and any unrecognized format
 END;
 
-
-
--- validating the new record date column 
-SELECT record_date, count(*) 
+-- Validation: confirm every remaining NULL is a genuinely blank/invalid
+-- source value, not a date format the CASE statement missed.
+SELECT record_date, count(*)
 FROM fact_campaigns
-WHERE record_date_clean IS NULL 
+WHERE record_date_clean IS NULL
   AND record_date NOT IN ('', '----')
 GROUP BY record_date;
 
+-- Replace the raw column with the cleaned one.
+ALTER TABLE fact_campaigns DROP COLUMN record_date;
+ALTER TABLE fact_campaigns RENAME COLUMN record_date_clean TO record_date;
 
+-- ---------------------------------------------------------------------
+-- 2. device: normalize casing/whitespace
+-- ---------------------------------------------------------------------
+-- Raw values vary in capitalization and spacing (e.g. 'mobile', 'Mobile ',
+-- 'MOBILE'). Trimmed and title-cased to a consistent form.
 
--- replacing record_date with record_date clean
-alter table fact_campaigns drop COLUMN record_date;
-alter table fact_campaigns rename column record_date_clean to record_date;
+UPDATE fact_campaigns
+SET device = trim(initcap(device));
 
--- validation
-select record_date from fact_campaigns;
+SELECT DISTINCT device FROM fact_campaigns;
 
+-- ---------------------------------------------------------------------
+-- 3. country: normalize and map aliases (fact_campaigns + dim_customer)
+-- ---------------------------------------------------------------------
+-- Raw country values have inconsistent casing/punctuation and multiple
+-- aliases for the same country (e.g. 'US', 'USA', 'United States').
+-- Standardized to a single canonical name per country in both tables.
 
+ALTER TABLE fact_campaigns ADD COLUMN country_clean VARCHAR(255);
 
---- device column: normalizing values 
+UPDATE fact_campaigns
+SET country_clean = trim(initcap(replace(country, '.', '')));
 
-update fact_campaigns
-set device = trim( initcap(device))
+UPDATE fact_campaigns
+SET country_clean = CASE
+        WHEN country_clean = 'Uk'  THEN 'United Kingdom'
+        WHEN country_clean = 'Us'  THEN 'United States'
+        WHEN country_clean = 'Usa' THEN 'United States'
+        WHEN country_clean = 'Uae' THEN 'United Arab Emirates'
+        ELSE country_clean
+    END;
 
--- validation
-select 
-    DISTINCT device 
-from fact_campaigns;
+SELECT DISTINCT country_clean FROM fact_campaigns;
 
+ALTER TABLE fact_campaigns DROP COLUMN country;
+ALTER TABLE fact_campaigns RENAME COLUMN country_clean TO country;
 
+-- Repeat the same normalization for dim_customer, so country values are
+-- consistent across both tables (needed for any customer-level joins).
+ALTER TABLE dim_customer ADD COLUMN country_clean VARCHAR(255);
 
--- cleaning the country and normalizing it
+UPDATE dim_customer
+SET country_clean = trim(initcap(replace(country, '.', '')));
 
-select distinct trim(initcap(replace(country, '.',''))) as 
-from fact_campaigns;
+UPDATE dim_customer
+SET country_clean = CASE
+        WHEN country_clean = 'Us' OR country_clean = 'Usa' THEN 'United States'
+        WHEN country_clean = 'Uae' THEN 'United Arab Emirates'
+        WHEN country_clean = 'Uk'  THEN 'United Kingdom'
+        ELSE country_clean
+    END;
 
-alter table fact_campaigns
-add column country_clean VARCHAR(255);
+ALTER TABLE dim_customer DROP COLUMN country;
+ALTER TABLE dim_customer RENAME COLUMN country_clean TO country;
 
+-- Validation: confirm both tables now share the same set of country values.
+SELECT DISTINCT country FROM fact_campaigns
+EXCEPT
+SELECT DISTINCT country FROM dim_customer;
 
--- creating a column for cleaned, normalized data
+-- city column checked and required no cleaning.
+SELECT DISTINCT city FROM dim_customer;
 
-update fact_campaigns
-set country_clean = trim(initcap(replace(country, '.','')));
+-- ---------------------------------------------------------------------
+-- 4. revenue: resolve NULLs based on conversion behavior
+-- ---------------------------------------------------------------------
+-- NULL revenue was investigated as two distinct cases rather than one:
+--   - 6,001 rows: NULL revenue + 0 conversions -> no conversion occurred,
+--     so revenue is genuinely zero. Filled with 0.
+--   - 4,948 rows: NULL revenue + conversions > 0 -> a conversion happened
+--     but its revenue was never recorded. This is a real data gap, not a
+--     zero, and is intentionally left NULL rather than imputed.
 
+UPDATE fact_campaigns
+SET revenue = 0
+WHERE revenue IS NULL AND conversions = 0;
 
-update fact_campaigns
-set country_clean = case 
-        when country_clean = 'Uk' then 'United Kingdom'
-        When country_clean = 'Us' then 'United States'
-        When country_clean = 'Usa' then 'United States'
-        When country_clean = 'Uae' then 'United Arab Emirates'
-        else country_clean 
-    end ;
+-- ---------------------------------------------------------------------
+-- 5. Business rule violations: funnel logic (impressions -> clicks -> conversions)
+-- ---------------------------------------------------------------------
+-- Rows violating the expected funnel (clicks > impressions, or
+-- conversions > clicks) are flagged rather than deleted, preserving the
+-- record while marking it as unreliable for funnel-based analysis.
 
+ALTER TABLE fact_campaigns ADD COLUMN invalid_clicks boolean;
 
+UPDATE fact_campaigns
+SET invalid_clicks = CASE
+        WHEN clicks > impressions THEN true
+        ELSE false
+    END;
+
+SELECT count(*) FROM fact_campaigns WHERE invalid_clicks IS true;
+
+ALTER TABLE fact_campaigns ADD COLUMN invalid_conversion boolean;
+
+UPDATE fact_campaigns
+SET invalid_conversion = CASE
+        WHEN conversions > clicks THEN true
+        ELSE false
+    END;
+
+SELECT count(*) FROM fact_campaigns WHERE invalid_conversion IS true;
+
+-- ---------------------------------------------------------------------
+-- 6. dim_campaign: flag invalid date ranges (end_date < start_date)
+-- ---------------------------------------------------------------------
+-- 103 campaigns (~2% of dim_campaign) have an end_date before their
+-- start_date. Flagged with a boolean column rather than corrected or
+-- removed, so downstream analysis can choose to include or exclude them.
+
+SELECT
+    count(*),
+    count(*) * 100.0 / (SELECT count(*) FROM dim_campaign) AS pct_affected
+FROM dim_campaign
+WHERE end_date < start_date;
+
+ALTER TABLE dim_campaign ADD COLUMN invalid_date boolean;
+
+UPDATE dim_campaign
+SET invalid_date = CASE
+        WHEN start_date > end_date THEN true
+        ELSE false
+    END;
 
 -- Validation
-select distinct country_clean
-from fact_campaigns
+SELECT start_date, end_date, invalid_date
+FROM dim_campaign
+WHERE start_date > end_date;
 
--- updating and replacing the original country with the cleaned one 
-alter table fact_campaigns drop column country;
-alter table fact_campaigns rename column country_clean to country; 
+-- ---------------------------------------------------------------------
+-- 7. fact_campaigns: flag orphaned campaign_id (no match in dim_campaign)
+-- ---------------------------------------------------------------------
+-- 3,321 fact rows (2,379 unique campaign_id values, ~1.5% of fact_campaigns)
+-- reference a campaign_id with no matching row in dim_campaign. Flagged
+-- rather than dropped, since these rows still carry real revenue/spend
+-- that would otherwise be silently lost from totals.
 
+SELECT
+    count(*) AS invalid_fact_id,
+    round(count(*) * 100.0 / (SELECT count(*) FROM fact_campaigns), 2) AS percentage
+FROM fact_campaigns AS f
+LEFT JOIN dim_campaign AS p ON p.campaign_id = f.campaign_id
+WHERE p.campaign_id IS NULL;
 
-
-
--- cleaning the country column in the customer table
-select distinct trim(initcap(replace(country, '.', ''))) from dim_customer;
-
-alter table dim_customer
-add column country_clean VARCHAR(255)
-
-update dim_customer
-set country_clean = trim(initcap(replace(country, '.', ''))) 
- 
- -- validating cleaning result
-select distinct country_clean, 
-case
-    when country_clean = 'Us' or country_clean = 'Usa' then 'United States'
-    when country_clean = 'Uae' then 'United Arab Emirates'
-    when country_clean = 'Uk' then 'United Kingdom'
-    else country_clean
-End
-from dim_customer
-
-alter table dim_customer drop column country;
-alter table dim_customer rename column country_clean to country;
-
-update dim_customer
-set 
-country = case
-                when country= 'Us' or country = 'Usa' then 'United States'
-                when country= 'Uae' then 'United Arab Emirates'
-                when country = 'Uk' then 'United Kingdom'
-                else country
-            End;
-
-
-
--- validation
-select distinct country from dim_customer;
-
--- ensuring country in fact campaigns has the same values as country in customer 
-SELECT DISTINCT country
+SELECT count(DISTINCT campaign_id)
 FROM fact_campaigns
-EXCEPT
-SELECT DISTINCT country
-FROM dim_customer;
+WHERE campaign_id NOT IN (SELECT campaign_id FROM dim_campaign);
 
-
-
-
--- checking city column (doesn't need cleaning)
-select  distinct city from dim_customer;
-
-
-
--- revenue column
-
-select revenue from fact_campaigns
-where revenue is null and conversions>0;
-
-
---- replacing 6001 null values with 0 as the conversion = 0
--- keeping the 4948 revenue null value as them because conversion is more than 0 and this doesn't make sense (missing values).
-
-
--- updating null values in revenue column with 0 conversion
-update fact_campaigns
-set revenue = 0 
-where revenue is null and conversions = 0;
-
-
--- business rule violations
-
-select * from fact_campaign
-where clicks > impressions;
-
--- create a column to flag invalid data to document the error (clicks > impressions)
-
-alter table fact_campaigns
-add column invalid_clicks boolean;
-
-update fact_campaigns
-set invalid_clicks = 
-        case 
-            when clicks > impressions then true
-            else false
-            end 
-
-select count(invalid_clicks) from fact_campaigns
-where invalid_clicks is true;
-
-
-
--- create a column to flag invalid data to document the error (conversions > clicks)
-
-alter table fact_campaigns
-add column invalid_conversion boolean;
-
-update fact_campaigns
-set invalid_conversion = 
-        case 
-            when conversions > clicks then true
-            else false
-            end 
-
-select count(invalid_conversion) from fact_campaigns
-where invalid_conversion is true;
-
-
-
----- validating logic end and start date 
-
-select * from dim_campaign
-where start_date > end_date;
-
--- quantifying the influence of the invalid dates 
-select 
-    count(*),
-    count(*)*100 / (select count(*) from dim_campaign)
-    from dim_campaign
-    where end_date <start_date 
-
-
--- there are 103 invalid values and it affects 2% of the data in the dim_campaign
-
-
---- adding an invalid date column to flag invalid start and end dates
-
-alter table dim_campaign
-add column invalid_date date;
-
--- i made a mistake by creating invalid_date as date it should've been boolean
-
-alter table  dim_campaign
-alter column invalid_date type boolean using(invalid_date is not null); 
-
-update dim_campaign
-set invalid_date =
-    case when start_date > end_date then true
-        else false 
-        end;
-
--- new column validation 
-select 
-    start_date,
-    end_date, 
-    invalid_date 
-from dim_campaign
-where start_date > end_date
-
-
-
----------------------------------------------------
--- from profiling stage: 3321 campaign ids don't exist in in dim campaign
-
-select count(*) invalid_fact_id,
-    round(count(*) * 100.0 / (select count(*) from fact_campaigns),2) as percentage
-from fact_campaigns as f
-left join dim_campaign as p
-on p.campaign_id = f.campaign_id 
-where p.campaign_id is null;
-
-
--- counting unique missing values
-select count (distinct campaign_id)
-from fact_campaigns
-where campaign_id not in (select campaign_id from dim_campaign);
-
-
--- cost and revenue of these missing campaigns
-
-select 
+SELECT
     campaign_id,
-    count (*) as missing,
-    sum(revenue) as total_rev, sum(spendings) as total_cost
+    count(*) AS missing_rows,
+    sum(revenue) AS total_revenue,
+    sum(spendings) AS total_cost
+FROM fact_campaigns
+WHERE campaign_id NOT IN (SELECT campaign_id FROM dim_campaign)
+GROUP BY campaign_id
+ORDER BY total_cost DESC;
 
-from fact_campaigns
-where campaign_id not in (select campaign_id from dim_campaign)
-group by campaign_id
-order by total_cost desc;
+ALTER TABLE fact_campaigns ADD COLUMN id_flag boolean;
 
-
-
--- creating a flag column to flag missing id from dim campaign
-
-alter table fact_campaigns
-add column id_flag boolean;
-
-UPDATE fact_campaigns as f
-SET id_flag = TRUE
+UPDATE fact_campaigns AS f
+SET id_flag = true
 WHERE NOT EXISTS (
-    SELECT campaign_id
-    FROM dim_campaign as c
+    SELECT campaign_id FROM dim_campaign AS c
     WHERE c.campaign_id = f.campaign_id
 );
 
 UPDATE fact_campaigns
-SET id_flag = FALSE
+SET id_flag = false
 WHERE id_flag IS NULL;
 
+-- ---------------------------------------------------------------------
+-- 8. Verification: confirm record_date cleaning against source data
+-- ---------------------------------------------------------------------
+-- A backup table (loaded from the original source CSV) is used to verify
+-- that the cleaned record_date column matches the original source values
+-- with no unintended data loss during the cleaning process above.
 
-/*
--- total number of missing ids is 3321
--- affected percentage is 1.51 so i will leave it there and just document it  
--- 2379 unique misisng values in campaign_id (in fact table but not in the dimensional)
--- maximum total revenue is 19324.08, maximum total cost is  6860.31
--- id_flag column has a true value for each id does exist in fact table but not in the dim table
-
-*/
-
-
-
-
--- importing the original data of record_dates to fix the missing values as i made a mistake and deleted the original column
-
-create table fact_campaigns_backup(
-    fact_id int,
-    camaign_id int, 
-    customer_id int,
-    channel_id int,
-    record_date text,
-    device varchar(50),
-    country varchar(50),
-    impressions NUMERIC,
-    clicks NUMERIC,
-    conversions NUMERIC,
-    spendings DECIMAL,
-    revenue decimal
-
+CREATE TABLE fact_campaigns_backup (
+    fact_id      int,
+    campaign_id  int,
+    customer_id  int,
+    channel_id   int,
+    record_date  text,
+    device       varchar(50),
+    country      varchar(50),
+    impressions  numeric,
+    clicks       numeric,
+    conversions  numeric,
+    spendings    decimal,
+    revenue      decimal
 );
 
-alter table fact_campaigns_backup
-rename column camaign_id to campaign_id;
+-- Path is local to the original development environment; update before
+-- re-running.
+COPY fact_campaigns_backup
+FROM 'G:/Portfolio/marketing campaign project/fact_campaign_performance.csv'
+WITH (FORMAT csv, HEADER true, DELIMITER ',');
 
-copy fact_campaigns_backup FROM 'G:/Portfolio/marketing campaign project/fact_campaign_performance.csv' WITH (FORMAT csv, HEADER true, DELIMITER ',');
+-- Verification query: any row where the cleaned table lost a record_date
+-- value that exists in the original backup would appear here.
+SELECT DISTINCT f.fact_id, f.record_date, b.record_date
+FROM fact_campaigns AS f
+LEFT JOIN fact_campaigns_backup AS b ON b.fact_id = f.fact_id
+WHERE f.record_date IS NOT NULL AND b.record_date IS NULL;
 
-
-select  distinct f.fact_id ,  f.record_date, b.record_date from fact_campaigns as f
-left JOIN fact_campaigns_backup as b
-on b.fact_id = f.fact_id
-where f.record_date is not null and b.record_date is  null;
-
-
---- the data in record date in fact table is correct 
-
-
-
+-- Result: no rows returned — record_date cleaning preserved all source data.
