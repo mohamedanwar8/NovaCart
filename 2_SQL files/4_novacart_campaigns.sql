@@ -32,10 +32,4 @@ order by end_date desc
 
 
 
---- join dim campaing with facts and pull all necessary metrics
--- aggregate on campaign level and calaculate the needed metrics
--- count the invalid and null values to exclude and create a clean version of new aggregated campaign level table
--- segment based on campaign type, country, customer ...etc using power bi filters 
--- 
-
 

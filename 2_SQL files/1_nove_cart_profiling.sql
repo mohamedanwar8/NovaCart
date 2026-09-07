@@ -1,9 +1,3 @@
-/*
-1. create a database called nova_cart
-2. create 5 tables with the necessary columns to import the csv files 
-in order (fact_campaign, dim_campaign, dim_channel, dim_customer, dim_date)
-*/
-
 
 create database nova_cart; 
 
@@ -51,12 +45,6 @@ create table dim_channel(
 );
 
 
-
-
--- i forgot a column so i will delete the table then adjust the creation code 
-drop table dim_customer
-
--- creating the table again
 create table dim_customer(
     customer_id int,
     first_name VARCHAR(50),
@@ -69,7 +57,6 @@ create table dim_customer(
     segment VARCHAR(50),
     signup_date date,
     preferred_device VARCHAR(50)
-
 );
 
 
@@ -89,13 +76,11 @@ create table dim_date(
 
 
 
--- droping all the data in the tables to eliminate duplicates
+-- droping all the data in the tables to prevent duplicated data
 truncate table fact_campaigns, dim_campaign, dim_customer, dim_date, dim_channel
 
-/*
-Import the csv files in the tables i created
-*/
 
+-- importing data from csv files
 copy fact_campaigns FROM 'G:/Portfolio/marketing campaign project/fact_campaign_performance.csv' WITH (FORMAT csv, HEADER true, DELIMITER ',');
 
 copy dim_campaign from 'G:/Portfolio/marketing campaign project/dim_campaign.csv' with (format csv,  header true, delimiter ',');
@@ -109,9 +94,7 @@ copy dim_channel from 'G:/Portfolio/marketing campaign project/dim_channel.csv' 
 
 
 
-/* ensuring that i have the data 
-*/
-
+-- validating data after importing 
 select count(*) from fact_campaigns;
 select count(*) from dim_campaign;
 select count(*) from dim_channel;
@@ -119,12 +102,6 @@ select count(*) from dim_customer;
 select count(*) from dim_date;
 
 
-
---------------------
-/*
-Exploring the data
-table by table 
-*/
 
 
 
@@ -143,19 +120,12 @@ select distinct country  from fact_campaigns;
 
 
 /*
-- change the record_date format to make it consistent as a date
-- deal with missing values in the impressions, clicks, conversions, spendings, and revenue columns
-- data normalization for the device column to transform the data into a standard and consistent form
-- data standarization for the country column
-
-
 investigating missing values
-
 - no null values in clicks, impressions, spendings, or conversions columns
 - 10949 null values in revenue, 209426 not null values
 - there is no duplicate values 
-
 */
+
 
 select count(*) from fact_campaigns
 where revenue is null;
@@ -185,7 +155,8 @@ This indicates inconsistent capitalization and formatting that will require stan
 
 select distinct country from fact_campaigns;
 
--- there are multiple rows has the same values but in different formats (need standarization). 
+-- there are multiple rows has the same values but in different formats (need normalization). 
+
 
 
 -- profiling the numeric values: impressions, clicks, conversions, spendings, revenue 
@@ -197,12 +168,12 @@ select
     min(revenue) as min_revenue
 from fact_campaigns;
 
+
 /*
 minimum value for each of 
 impressions= 20
 clicks, conversion, spendings = 0
 revenue = -12969.81
-
 */
 
 select 
@@ -212,6 +183,7 @@ select
     max(spendings) as max_spendings,
     max(revenue) as max_revenue
 from fact_campaigns;
+
 
 /*
 maximum values:
@@ -225,7 +197,9 @@ The revenue column contains negative values.
 These require business validation because they may represent refunds, returns, accounting adjustments, or data quality issues.
 */
 
--- marketing check; is there any impressions record < clicks or clicks < conversion
+
+-- marketing logic; is there any impressions record < clicks or clicks < conversion?
+
 select count(*) from fact_campaigns
 where impressions < clicks;
 
@@ -238,6 +212,7 @@ less clicks than conversions = 2233
 */
 
 
+
 /*
 the main challenges with the fact_campaigns table are 
 Missing revenue
@@ -245,12 +220,12 @@ Inconsistent devices
 Inconsistent countries
 Negative revenue
 Business rule violations
-
 */
 
 -- i made a mistake naming the campaign_id column in the fact_campaigns table so i needed to rename it
 alter table fact_campaigns
 rename column camaign_id to campaign_id 
+
 
 
 -- checking the integrity of the campaign id in the fact table
@@ -259,8 +234,8 @@ left join dim_campaign as c
 on f.campaign_id = c.campaign_id
 where c.campaign_id is null;
 
-
 -- There are 3,321 rows in the fact table whose campaign_id has no matching record in dim_campaign.
+
 
 
 -- date range
@@ -270,7 +245,8 @@ select column_name, data_type
 from information_schema.columns
 where table_name = 'fact_campaigns' and column_name = 'record_date';
 
-/* The record_date column is stored as a text (VARCHAR) field instead of a date type. 
+/* 
+The record_date column is stored as a text (VARCHAR) field instead of a date type. 
 In addition, the column contains multiple date formats, 
 preventing reliable chronological analysis until the data is standardized and converted to a proper DATE data type.
 */
@@ -278,13 +254,10 @@ preventing reliable chronological analysis until the data is standardized and co
 
 
 
----------------------
--------------------
 -- profiling dimensions 
 
+
 select * from dim_campaign limit 5;
-
-
 
 /*
 campaign dimension profiling
@@ -294,6 +267,7 @@ start & end date, budget, type, target segment, and country
 - the primary key is campaign_id
 - campaign id doesn't have duplicates or null values 
 */
+
 
 select count(campaign_id) from dim_campaign
 where campaign_id is null;
@@ -337,18 +311,16 @@ where target_country is null
 - campaign_id has 151 null values 
 - campaign manager has 769 null values
 - 0 nulls in  channel_id, start date, end date, budget, campaign_type, target_segment, and target country
-
 */
+
+
 
 
 -- investigating dimensional columns
 -- dim campaign
 
 select distinct campaign_type from dim_campaign;
-
-/*
-campaign type, target_country, target_segment have unique values 
-*/
+-- campaign type, target_country, target_segment have unique values
 
 
 -- business logic check; is there any campaign ends before start?
@@ -361,8 +333,8 @@ These records require correction before calculating campaign duration or perform
 */
 
 
--- Determine whether campaign budgets are reasonable.
 
+-- Determine whether campaign budgets are reasonable.
 select 
     min(budget),
     max(budget)
@@ -388,8 +360,6 @@ select * from dim_customer limit 3;
 - country has 156 nulls 
 - mail has 256 nulls
 - the rest of the columns have no nulls
-
-
 */
 
 
@@ -446,9 +416,10 @@ one row means a channel, its name, subtype, and category
 - all of the dimensions have standardized data 
 - no duplicates in the channel_id
 - no null values
-
-
 */
+
+
+
 
 select * from dim_channel
 limit 3;
@@ -465,8 +436,6 @@ group by channel_id
 having count(*) > 1;
 
 
-
-
 /*
 profiling the dim date table 
 - primary key: date_id
@@ -474,10 +443,8 @@ one row meaning a date record (day) in date, the day order in the week, the numb
 the year, the name of the day in the week, and if its a weekend or not
 - there are no missing values in any of the dimensions
 - no duplicate dates
-
-
-
 */
+
 
 select * from dim_date 
 limit 3;

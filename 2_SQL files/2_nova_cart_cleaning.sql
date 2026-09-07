@@ -1,4 +1,5 @@
 
+
 -- =====================================================================
 -- NovaCart — Fact Table Cleaning
 -- Cleans fact_campaigns and standardizes shared dimension values.
