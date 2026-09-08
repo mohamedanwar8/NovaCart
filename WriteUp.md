@@ -12,9 +12,11 @@ My first instinct was to ask "which campaigns have the highest ROAS?" But early 
 
 That reframe — efficiency *and* scale, considered together — became the backbone of the analysis.
 
+
 ## The data
 
-I generated a synthetic dataset (~220K campaign performance records, ~5,100 campaigns, 3 years of activity) using Python, deliberately seeding it with the kind of messiness real marketing data actually has: inconsistent date formats, mixed country and device naming, missing revenue values, campaigns with invalid date ranges, and rows that violate the expected funnel logic (conversions can't exceed clicks, clicks can't exceed impressions).
+I generated a synthetic dataset (~220K campaign performance records, ~5,100 campaigns, 3 years of activity) using Claude, deliberately seeding it with the kind of messiness real marketing data actually has: inconsistent date formats, mixed country and device naming, missing revenue values, campaigns with invalid date ranges, and rows that violate the expected funnel logic (conversions can't exceed clicks, clicks can't exceed impressions).
+
 
 ## Cleaning: treating each problem as a decision, not a checklist item
 
@@ -26,6 +28,7 @@ I generated a synthetic dataset (~220K campaign performance records, ~5,100 camp
 
 **I caught and recovered from my own mistake mid-project.** After renaming and replacing the `record_date` column, I built a backup table from the original source file specifically to verify no data had been lost in the process — a real, if small, example of catching an error before it became a bigger problem.
 
+
 ## Building the segmentation framework
 
 With cleaning done, I calculated core KPIs per campaign — revenue, spend, conversion rate, cost per conversion, and ROAS — then tested how each one ranked campaigns independently. Every single-metric ranking told a different, sometimes contradictory story (the highest-revenue campaign wasn't the most efficient one; the lowest cost-per-conversion campaign wasn't the highest scale). That's what led to building a two-dimensional framework instead:
@@ -35,11 +38,13 @@ With cleaning done, I calculated core KPIs per campaign — revenue, spend, conv
 
 Crucially, medians for both were calculated **per campaign type**, not across the whole dataset — a Brand awareness campaign and a Retention campaign have naturally different cost and return profiles, so comparing both against one global number would unfairly penalize or flatter campaigns based on category alone, not actual performance.
 
+
 ## A data integrity bug I caught before it reached the dashboard
 
 While building the final campaign-metrics table in Power BI, I noticed the relationship to the campaign dimension table showed as many-to-one instead of the one-to-one it should have been. Tracing it back, the per-campaign-type median calculation was being joined onto the data *before* it had been properly aggregated to one row per campaign — so any campaign whose type had more than one matching median record got silently duplicated.
 
 I rebuilt the query to aggregate to one row per campaign first, then join descriptive data and medians afterward, joined explicitly on `campaign_type`. I validated the fix at each stage with `COUNT(*) = COUNT(DISTINCT campaign_id)` before trusting any number downstream — the same discipline I'd want in a production reporting pipeline, not just a portfolio exercise.
+
 
 ## Handling outliers honestly
 
@@ -47,6 +52,7 @@ Two metrics needed outlier treatment before the dashboard was readable, and I ha
 
 - **ROAS**: percentile analysis showed a sharp break between the 75th and 80th percentile (6.4x jumping to 33x) — a sign of the same near-zero-spend distortion I'd found earlier with the 897x campaign, not genuinely exceptional performance. Values above the 75th percentile were excluded from the visualization.
 - **Total cost**: this distribution was smoothly right-skewed with no discontinuity — completely normal for marketing spend, where most campaigns run modest budgets and a handful run much larger ones. This wasn't an anomaly to fix, just a readability tradeoff, so a more conservative 95th-percentile cutoff was used instead of treating it the same way as the ROAS issue.
+
 
 ## The result
 
@@ -61,6 +67,7 @@ Across 1,195 campaigns active in the last 3 years:
 
 The standout finding: campaigns already receiving heavy investment return **3.05x** — but a group receiving *below-median* spend for their category returns **3.26x**, outperforming the well-funded group entirely. In plain terms: NovaCart's most efficient campaigns aren't the ones getting the most money.
 
+
 ## The recommendation
 
 **Invest in the "Low scale & High efficiency" category.** The data shows these 323 campaigns already produce a higher return than the campaigns currently receiving the most budget. If they can generate 3.26x ROAS at below-median spend, scaling their investment is a direct, low-risk lever for improving overall marketing return — without needing to increase NovaCart's total budget. This is, in short: **scale what's already working.**
@@ -69,10 +76,8 @@ The standout finding: campaigns already receiving heavy investment return **3.05
 
 **PostgreSQL** — CTEs, window functions (`PERCENTILE_CONT`), data validation queries, aggregation-order debugging
 **Power BI** — star schema modeling, DAX measures (weighted-ratio calculations via `DIVIDE`, avoiding the unweighted-average trap), quadrant scatter visualization with dynamic reference lines
-**Python** — synthetic dataset generation (Faker, NumPy, Pandas) with intentional, realistic data quality issues
 
 ---
 
 *NovaCart is a simulated company built for portfolio purposes. The dataset is synthetic; the reasoning — investigating misleading metrics, validating aggregation logic, and handling outliers with justification rather than guesswork — reflects the same approach I'd bring to a real dataset.*
 
-[View the SQL and Power BI files on GitHub →](#)
