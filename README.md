@@ -29,16 +29,19 @@ The campaigns already receiving the most budget (3.05x ROAS) are actually being 
 ## Repo structure
 
 ```
-├── sql/            SQL scripts: data profiling, cleaning, and the final campaign-performance query
-├── powerbi/         Power BI file (.pbix) and dashboard screenshot
-├── synthetic-data/   Source CSVs and a README describing the dataset and its intentional data quality issues
-└── docs/            Data dictionary for the final analysis table
+- synthetic-data/   Source CSVs and a README describing the dataset and its intentional data quality issues
+- sql/            SQL scripts: data profiling, cleaning, and the final campaign-performance query
+- powerbi/         Power BI file (.pbix) and dashboard screenshot
+- docs/            Data dictionary for the final analysis table
 ```
 
 ## Tools
 
-PostgreSQL (CTEs, window functions, percentile analysis) · Power BI (star schema modeling, DAX) · Python (synthetic data generation with Faker, NumPy, Pandas)
+- PostgreSQL (CTEs, subquery, window functions, percentile analysis)  
+- Power BI (star schema modeling, DAX, Visuals) 
+- Claude (synthetic data generation to imitate real world messy data)
 
 ---
 
-*NovaCart is a simulated company built for portfolio purposes. The dataset is synthetic; the analytical approach — data validation, category-fair comparisons, and outlier handling — mirrors what I'd apply to a real campaign performance dataset.*
+*NovaCart is a simulated company built for portfolio purposes. The dataset is synthetic; the analytical approach 
+data validation, category-fair comparisons, and outlier handling mirrors what I'd apply to a real campaign performance dataset.*
